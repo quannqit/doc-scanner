@@ -1,0 +1,78 @@
+{
+  "name": "@quannqit/doc-scanner",
+  "version": "0.1.0",
+  "description": "Document scanning for the web: detect a sheet of paper in a camera frame or photo, flatten its perspective, and clean it up like a scanner. Zero dependencies, no OpenCV. Optional React camera UI.",
+  "keywords": [
+    "document-scanner",
+    "scanner",
+    "camera",
+    "perspective",
+    "crop",
+    "deskew",
+    "react",
+    "pdf"
+  ],
+  "license": "MIT",
+  "author": "quannqit",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/quannqit/doc-scanner.git"
+  },
+  "homepage": "https://github.com/quannqit/doc-scanner#readme",
+  "bugs": {
+    "url": "https://github.com/quannqit/doc-scanner/issues"
+  },
+  "type": "module",
+  "sideEffects": false,
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./react": {
+      "types": "./dist/react/index.d.ts",
+      "import": "./dist/react/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "rm -rf dist && tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "prepublishOnly": "npm run typecheck && npm test && npm run build",
+    "demo": "vite --config demo/vite.config.ts",
+    "demo:build": "vite build --config demo/vite.config.ts"
+  },
+  "peerDependencies": {
+    "react": ">=17",
+    "react-dom": ">=17"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    },
+    "react-dom": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/react": "18.3.11",
+    "@types/react-dom": "^18.3.0",
+    "jpeg-js": "0.4.4",
+    "react": "18.3.1",
+    "react-dom": "^18.3.1",
+    "typescript": "5.6.2",
+    "vite": "^5.4.8",
+    "vitest": "2.1.4"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
