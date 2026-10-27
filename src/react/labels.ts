@@ -6,6 +6,9 @@ export interface ScannerLabels {
   pickPhoto: string;
   takePhoto: string;
   torch: string;
+  zoom: string;
+  switchCamera: string;
+  camera: string;
   aimHint: string;
   holdHint: string;
   adjustHint: string;
@@ -26,6 +29,9 @@ export const enLabels: ScannerLabels = {
   pickPhoto: 'Choose photo',
   takePhoto: 'Take photo',
   torch: 'Flash',
+  zoom: 'Zoom',
+  switchCamera: 'Switch camera',
+  camera: 'Camera',
   aimHint: 'Point the camera at a document',
   holdHint: 'Document found — hold still and tap capture',
   adjustHint: 'Drag the corners to the edges of the document',
@@ -46,6 +52,9 @@ export const viLabels: ScannerLabels = {
   pickPhoto: 'Chọn ảnh',
   takePhoto: 'Chụp ảnh',
   torch: 'Đèn',
+  zoom: 'Thu phóng',
+  switchCamera: 'Đổi camera',
+  camera: 'Camera',
   aimHint: 'Hướng camera vào tài liệu',
   holdHint: 'Đã thấy tài liệu — giữ yên và bấm chụp',
   adjustHint: 'Kéo các góc khớp với mép tài liệu',

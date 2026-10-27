@@ -5,11 +5,13 @@ and clean it up like a flatbed scanner. Optional full-screen React camera UI wit
 adjustment, filters and multi-page capture.
 
 - **Zero dependencies, no OpenCV.** ~6 kB gzipped (~10 kB with the React UI) instead of an 8 MB OpenCV.js download.
-- **Robust on busy backgrounds.** Paper is found by colour (bright, unsaturated) rather than by edges, so it
-  works on cardboard, wood or printed packaging, and when a cable or hand covers part of an edge.
+- **Robust in real conditions.** Combines colour and edge evidence: works on cardboard, wood or printed
+  packaging, on light floors and in patchy sunlight, next to tile lines, and when a cable covers part of an edge.
 - **Scanner-style filters**: `color` (keeps red stamps and blue ink), `gray`, `bw`, `original`. Shadows and
   uneven lighting are removed.
 - **PDF export** of multiple pages, no PDF library needed.
+- Zoom buttons and pinch-to-zoom (camera zoom where available, digital otherwise).
+- Switch between a phone's rear cameras (main, ultra-wide, telephoto, macro); the choice is remembered.
 - Works without the camera API too (plain HTTP, denied permission): falls back to the device photo picker.
 
 ```sh
@@ -54,6 +56,17 @@ function ScanButton({ onFiles }: { onFiles: (files: File[]) => void }) {
 | `fileName(i)` | `scan-YYYYMMDD-HHmmss-N.jpg` | |
 | `labels` | `enLabels` | Any subset of `ScannerLabels`; `viLabels` ships for Vietnamese |
 | `zIndex` | very high | |
+| `maxDigitalZoom` | `3` | Zoom limit when the camera has no zoom of its own; `1` hides zoom there |
+
+**Rear cameras.** Many phones have several rear cameras, and the browser's default pick is not always the
+main one (an ultra-wide lens may not focus up close). When there is more than one, a button in the top bar
+(showing e.g. "1/3") cycles through them, with a short note naming the active camera. The choice is stored in
+`localStorage` (`doc-scanner:camera`) and reused next time; if that camera is gone, the default is used.
+
+**Zoom.** The camera screen has 1×/2×/3× buttons (like the built-in camera app) and pinch-to-zoom. Where the
+browser exposes the camera's own zoom (Chrome on Android) that is used, including ultra-wide 0.5× when the phone
+offers it. Elsewhere (iPhone Safari, desktops) zoom is digital: the preview and the captured photo are cropped to
+the centre, which helps framing but does not add detail — moving the phone closer gives a sharper scan.
 
 The camera needs a secure context (HTTPS or `localhost`).
 
@@ -88,16 +101,27 @@ const clean = enhance(flat, 'bw');                // 'color' | 'gray' | 'bw' | '
 
 ## How detection works
 
-1. Downscale to ~400 px. Mark pixels that are bright and unsaturated; try a few thresholds (Otsu-based) to
-   cope with warm or dim lighting.
-2. Morphological close (bridges text and thin occluders) and open (cuts thin links to neighbouring white areas).
-3. For each large region, take the convex hull and reduce it to the **smallest enclosing quadrilateral**, so a
-   corner hidden under an object is restored instead of cut off.
-4. Score regions by how well they fill their quad, their size, and whether they touch the frame border (a white
-   floor or wall), and keep the best.
+Two independent ways of proposing a document outline, one way of judging them:
 
-Limitation: white paper on a white table has no colour contrast to find. The UI then starts from an inset
-frame and the user drags the corners.
+1. **Colour candidates.** Bright, unsaturated regions (a few Otsu-based thresholds for warm, dim or harsh
+   light), closed and opened morphologically, each reduced to its **smallest enclosing quadrilateral** — so a
+   corner hidden under a cable or hand is restored rather than cut off.
+2. **Edge candidates.** The strongest straight edges from a gradient-oriented Hough transform, combined into
+   quadrilaterals. This is what finds white paper on a light floor or in patchy sunlight, where colour alone
+   cannot separate paper from background.
+3. **Scoring.** Every candidate is judged by how much of its outline runs along real edges, with checks that
+   reflect what a sheet's border looks like:
+   - a **step** edge with one polarity all the way round (paper on one side, background on the other) — not a
+     thin line such as grout, a tile joint or a printed frame, and not edges of mixed sign such as a cable;
+   - **L-shaped corners** where both edges stop — a light or shadow boundary crossing the sheet continues past
+     the sheet's edges, making T-junctions;
+   - bigger is better; touching the frame border is penalised.
+4. **Refinement.** The winner's sides are re-fitted to edge points at a finer resolution, for accurate corners.
+
+Detection takes ~20 ms on a 360 px frame on a laptop, so the live preview runs it several times a second.
+
+Limitation: when the sheet's edge has no visible contrast at all (white paper on an equally white, evenly lit
+table), nothing can be found; the UI then starts from an inset frame and the user drags the corners.
 
 ## Demo
 

@@ -26,6 +26,8 @@ export type EnhanceMode =
 export interface DetectOptions {
   /** Image is downscaled so its long side is at most this before detecting. Default 400. */
   workSize?: number;
+  /** Corners are fitted to the edges at this size (long side) after the search. Default 1000. */
+  refineSize?: number;
   /** Minimum share of the frame the document must cover, 0–1. Default 0.08. */
   minArea?: number;
 }
@@ -33,6 +35,6 @@ export interface DetectOptions {
 export interface Detection {
   /** Corners in the coordinates of the image passed in. */
   corners: Quad;
-  /** 0–1. How well the paper region fills the detected quad. */
+  /** 0–1. How much of the quad's outline runs along real edges in the image. */
   confidence: number;
 }

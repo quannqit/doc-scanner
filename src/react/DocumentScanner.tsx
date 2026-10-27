@@ -34,6 +34,11 @@ export interface DocumentScannerProps {
   fileName?: (index: number) => string;
   labels?: Partial<ScannerLabels>;
   zIndex?: number;
+  /**
+   * Highest digital zoom offered when the camera has no zoom of its own (iPhone Safari, most desktops).
+   * Digital zoom crops the frame, so it trades resolution for framing. Default 3; 1 hides zoom there.
+   */
+  maxDigitalZoom?: number;
 }
 
 type Stage =
@@ -42,6 +47,29 @@ type Stage =
   | { kind: 'review'; source: HTMLCanvasElement; corners: Quad; flat: RGBAImage };
 
 const LIVE_SIZE = 360;
+const CAMERA_KEY = 'doc-scanner:camera';
+/** Zoom is remembered per camera: 2× on a main camera means something else than on a telephoto. */
+const zoomKey = (cameraId: string | null | undefined) => `doc-scanner:zoom:${cameraId || 'default'}`;
+const readZoom = (cameraId: string | null | undefined) => {
+  try {
+    const z = Number(localStorage.getItem(zoomKey(cameraId)));
+    return Number.isFinite(z) && z > 0 ? z : null;
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * The rear cameras, in the browser's order (Android lists the main camera first). Labels look like
+ * "camera2 0, facing back" (Android) or "Back Ultra Wide Camera" (iPhone). When labels say nothing about the
+ * direction, every camera except obvious front ones is offered, plus whichever one is active.
+ */
+function rearCameras(all: MediaDeviceInfo[], activeId?: string) {
+  const front = /front|user|selfie|facetime|trước/i, back = /back|rear|environment|sau/i;
+  let list = all.filter((d) => back.test(d.label));
+  if (!list.length) list = all.filter((d) => !front.test(d.label) || d.deviceId === activeId);
+  return list.map((d) => ({ id: d.deviceId, label: d.label.replace(/,?\s*facing back/i, '').trim() }));
+}
 const ACCENT = '#2ecc71';
 
 function stamp() {
@@ -89,6 +117,7 @@ export function DocumentScanner({
   fileName = (i) => `scan-${stamp()}-${i + 1}.jpg`,
   labels: labelOverrides,
   zIndex = 2147483000,
+  maxDigitalZoom = 3,
 }: DocumentScannerProps) {
   const L = { ...enLabels, ...labelOverrides, modes: { ...enLabels.modes, ...labelOverrides?.modes } };
   const [stage, setStage] = useState<Stage>({ kind: 'camera' });
@@ -168,6 +197,7 @@ export function DocumentScanner({
         <CameraStage
           labels={L}
           pages={pages.length}
+          maxDigitalZoom={maxDigitalZoom}
           cameraError={cameraError}
           onCameraError={onCameraError}
           onClose={onCancel}
@@ -213,6 +243,7 @@ export function DocumentScanner({
 function CameraStage(props: {
   labels: ScannerLabels;
   pages: number;
+  maxDigitalZoom: number;
   cameraError: boolean;
   onCameraError: () => void;
   onClose: () => void;
@@ -221,34 +252,179 @@ function CameraStage(props: {
   onNativeCamera: () => void;
   onDone: () => void;
 }) {
-  const { labels: L, pages, cameraError, onCameraError } = props;
+  const { labels: L, pages, cameraError, onCameraError, maxDigitalZoom } = props;
   const video = useRef<HTMLVideoElement>(null);
   const track = useRef<MediaStreamTrack | null>(null);
   const live = useRef<Quad | null>(null);
   const [dims, setDims] = useState<{ w: number; h: number } | null>(null);
   const [quad, setQuad] = useState<Quad | null>(null);
   const [torch, setTorch] = useState<boolean | null>(null);
+  // zoom: `hw` uses the camera's own zoom; otherwise the centre of the frame is cropped (digital zoom)
+  const [zoomRange, setZoomRange] = useState<{ min: number; max: number; hw: boolean } | null>(null);
+  const [zoom, setZoomState] = useState(1);
+  const zoomRef = useRef(1);
+  const zoomBusy = useRef<number | null>(null);
+  const pinch = useRef(new Map<number, { x: number; y: number }>());
+  const pinchStart = useRef<{ dist: number; zoom: number } | null>(null);
   const { ref: area, box } = useFit(dims ? dims.w / dims.h : null);
+  // phones often have several rear cameras (main, ultra-wide, telephoto, macro); let the user pick and remember it
+  const [cameras, setCameras] = useState<{ id: string; label: string }[]>([]);
+  const [cameraId, setCameraId] = useState<string | null>(() => {
+    try {
+      return localStorage.getItem(CAMERA_KEY);
+    } catch {
+      return null;
+    }
+  });
+  const [activeId, setActiveId] = useState<string | null>(null);
+  const activeIdRef = useRef<string | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
+
+  const switchCamera = () => {
+    if (cameras.length < 2) return;
+    const i = cameras.findIndex((c) => c.id === activeId);
+    const next = cameras[(i + 1) % cameras.length];
+    try {
+      localStorage.setItem(CAMERA_KEY, next.id);
+    } catch {
+      /* private mode: just don't remember */
+    }
+    switched.current = true;
+    setCameraId(next.id);
+  };
+
+  const switched = useRef(false);
+  useEffect(() => {
+    if (!switched.current || !activeId) return;
+    const i = cameras.findIndex((c) => c.id === activeId);
+    if (i >= 0) setToast(`${L.camera} ${i + 1}/${cameras.length}${cameras[i].label ? ' · ' + cameras[i].label : ''}`);
+  }, [activeId, cameras]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(() => setToast(null), 1800);
+    return () => clearTimeout(t);
+  }, [toast]);
+
+  /** Crop of the video frame shown at the current digital zoom (the whole frame for camera zoom). */
+  const viewCrop = (w: number, h: number) => {
+    const z = zoomRange && !zoomRange.hw ? zoomRef.current : 1;
+    const cw = w / z, ch = h / z;
+    return { x: (w - cw) / 2, y: (h - ch) / 2, w: cw, h: ch };
+  };
+
+  const setZoom = (z: number) => {
+    if (!zoomRange) return;
+    z = Math.round(Math.min(zoomRange.max, Math.max(zoomRange.min, z)) * 100) / 100;
+    if (z === zoomRef.current) return;
+    zoomRef.current = z;
+    setZoomState(z);
+    live.current = null;
+    setQuad(null);
+    try {
+      localStorage.setItem(zoomKey(activeIdRef.current), String(z));
+    } catch {
+      /* private mode: just don't remember */
+    }
+    if (!zoomRange.hw || !track.current) return;
+    // pinching fires faster than the camera can follow: apply the latest value once the previous one is done
+    if (zoomBusy.current !== null) return void (zoomBusy.current = z);
+    zoomBusy.current = z;
+    const apply = async (t: MediaStreamTrack) => {
+      while (zoomBusy.current !== null) {
+        const target = zoomBusy.current;
+        try {
+          await t.applyConstraints({ advanced: [{ zoom: target } as MediaTrackConstraintSet] });
+        } catch {
+          /* keep the previous zoom */
+        }
+        if (zoomBusy.current === target) zoomBusy.current = null;
+      }
+    };
+    apply(track.current);
+  };
+
+  const onPointer = (e: RPointerEvent) => {
+    const pts = pinch.current;
+    if (e.type === 'pointerdown') pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    else if (e.type === 'pointermove' && pts.has(e.pointerId)) pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    else pts.delete(e.pointerId);
+    if (pts.size !== 2) return void (pinchStart.current = null);
+    const [a, b] = [...pts.values()];
+    const dist = Math.hypot(a.x - b.x, a.y - b.y);
+    if (!pinchStart.current) pinchStart.current = { dist, zoom: zoomRef.current };
+    else setZoom(pinchStart.current.zoom * (dist / pinchStart.current.dist));
+  };
 
   useEffect(() => {
     if (cameraError) return;
     let stream: MediaStream | null = null;
     let stopped = false;
+    // fresh state for the (possibly different) camera
+    setDims(null);
+    setQuad(null);
+    setTorch(null);
+    setZoomRange(null);
+    setZoomState(1);
+    zoomRef.current = 1;
+    live.current = null;
     (async () => {
       try {
         if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) throw new Error('unsupported');
-        stream = await navigator.mediaDevices.getUserMedia({
-          audio: false,
-          video: { facingMode: { ideal: 'environment' }, width: { ideal: 3840 }, height: { ideal: 2160 } },
-        });
+        const size = { width: { ideal: 3840 }, height: { ideal: 2160 } };
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({
+            audio: false,
+            video: cameraId ? { deviceId: { exact: cameraId }, ...size } : { facingMode: { ideal: 'environment' }, ...size },
+          });
+        } catch (e) {
+          if (!cameraId) throw e;
+          // the remembered camera is gone (another phone, browser reset): forget it and use the default
+          try {
+            localStorage.removeItem(CAMERA_KEY);
+          } catch {
+            /* ignore */
+          }
+          stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: { facingMode: { ideal: 'environment' }, ...size } });
+        }
         if (stopped) return stream.getTracks().forEach((t) => t.stop());
         const v = video.current!;
         v.srcObject = stream;
         await v.play();
         track.current = stream.getVideoTracks()[0];
-        const caps = (track.current.getCapabilities?.() ?? {}) as MediaTrackCapabilities & { torch?: boolean };
+        const settings = track.current.getSettings() as MediaTrackSettings & { zoom?: number };
+        setActiveId(settings.deviceId ?? null);
+        activeIdRef.current = settings.deviceId ?? null;
+        const saved = readZoom(activeIdRef.current);
+        const caps = (track.current.getCapabilities?.() ?? {}) as MediaTrackCapabilities & {
+          torch?: boolean;
+          zoom?: { min: number; max: number };
+        };
         if (caps.torch) setTorch(false);
+        if (caps.zoom && caps.zoom.max > caps.zoom.min) {
+          let current = settings.zoom ?? caps.zoom.min;
+          if (saved !== null) {
+            const z = Math.min(caps.zoom.max, Math.max(caps.zoom.min, saved));
+            try {
+              await track.current.applyConstraints({ advanced: [{ zoom: z } as MediaTrackConstraintSet] });
+              current = z;
+            } catch {
+              /* keep the camera's own zoom */
+            }
+          }
+          zoomRef.current = current;
+          setZoomState(current);
+          setZoomRange({ min: caps.zoom.min, max: caps.zoom.max, hw: true });
+        } else if (maxDigitalZoom > 1) {
+          const z = saved !== null ? Math.min(maxDigitalZoom, Math.max(1, saved)) : 1;
+          zoomRef.current = z;
+          setZoomState(z);
+          setZoomRange({ min: 1, max: maxDigitalZoom, hw: false });
+        }
         setDims({ w: v.videoWidth, h: v.videoHeight });
+        // camera names are only readable once permission is granted, so list them now
+        const all = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === 'videoinput' && d.deviceId);
+        if (!stopped) setCameras(rearCameras(all, settings.deviceId));
       } catch {
         if (!stopped) onCameraError();
       }
@@ -258,30 +434,36 @@ function CameraStage(props: {
       stream?.getTracks().forEach((t) => t.stop());
       track.current = null;
     };
-  }, [cameraError, onCameraError]);
+  }, [cameraError, onCameraError, maxDigitalZoom, cameraId]);
 
   // live detection on a small frame, ~8 times a second
   useEffect(() => {
     if (!dims) return;
     const small = document.createElement('canvas');
+    // the digital-zoom crop keeps the frame's proportions, so one small canvas fits every zoom level
     const k = LIVE_SIZE / Math.max(dims.w, dims.h);
     small.width = Math.round(dims.w * k);
     small.height = Math.round(dims.h * k);
     const ctx = small.getContext('2d', { willReadFrequently: true })!;
-    let misses = 0, raf = 0, last = 0;
+    let misses = 0, raf = 0, last = 0, gap = 120;
     const tick = (t: number) => {
       raf = requestAnimationFrame(tick);
       const v = video.current;
-      if (!v || t - last < 120 || v.readyState < 2) return;
+      if (!v || t - last < gap || v.readyState < 2) return;
       last = t;
-      ctx.drawImage(v, 0, 0, small.width, small.height);
+      const crop = viewCrop(dims.w, dims.h);
+      ctx.drawImage(v, crop.x, crop.y, crop.w, crop.h, 0, 0, small.width, small.height);
+      const kc = small.width / crop.w;
+      const started = performance.now();
       const d = detectDocument(ctx.getImageData(0, 0, small.width, small.height), { workSize: LIVE_SIZE });
+      // keep the main thread mostly free on slower phones: detect at most ~1/3 of the time
+      gap = Math.max(120, (performance.now() - started) * 3);
       if (!d) {
         if (++misses > 3) (live.current = null), setQuad(null);
         return;
       }
       misses = 0;
-      const next = d.corners.map((p) => ({ x: p.x / k, y: p.y / k })) as Quad;
+      const next = d.corners.map((p) => ({ x: p.x / kc + crop.x, y: p.y / kc + crop.y })) as Quad;
       const prev = live.current;
       const jump = prev ? Math.max(...next.map((p, i) => Math.hypot(p.x - prev[i].x, p.y - prev[i].y))) : Infinity;
       // smooth small jitter, follow big moves immediately
@@ -292,7 +474,7 @@ function CameraStage(props: {
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [dims]);
+  }, [dims]); // eslint-disable-line react-hooks/exhaustive-deps -- viewCrop reads refs
 
   const capture = async () => {
     const v = video.current;
@@ -309,7 +491,18 @@ function CameraStage(props: {
     }
     if (!source) source = await toCanvas(v);
     const sx = source.width / dims.w, sy = source.height / dims.h;
-    const hint = live.current ? (live.current.map((p) => ({ x: p.x * sx, y: p.y * sy })) as Quad) : null;
+    const crop = viewCrop(dims.w, dims.h);
+    if (crop.w < dims.w) {
+      // digital zoom: keep only what the user saw
+      const c = document.createElement('canvas');
+      c.width = Math.round(crop.w * sx);
+      c.height = Math.round(crop.h * sy);
+      c.getContext('2d')!.drawImage(source, crop.x * sx, crop.y * sy, c.width, c.height, 0, 0, c.width, c.height);
+      source = c;
+    }
+    const hint = live.current
+      ? (live.current.map((p) => ({ x: (p.x - crop.x) * sx, y: (p.y - crop.y) * sy })) as Quad)
+      : null;
     props.onCapture(source, hint);
   };
 
@@ -328,11 +521,16 @@ function CameraStage(props: {
       <TopBar>
         <IconButton label={L.close} onClick={props.onClose}>✕</IconButton>
         <span style={{ opacity: 0.85 }}>{pages > 0 ? L.pages(pages) : ''}</span>
-        {torch !== null ? (
-          <IconButton label={L.torch} onClick={toggleTorch} active={torch}>ϟ</IconButton>
-        ) : (
-          <span style={{ width: 44 }} />
-        )}
+        <span style={{ display: 'flex', gap: 8, minWidth: 44, justifyContent: 'flex-end' }}>
+          {cameras.length > 1 && (
+            <IconButton label={L.switchCamera} onClick={switchCamera}>
+              <span style={{ fontSize: 13, fontWeight: 700 }}>
+                {Math.max(1, cameras.findIndex((c) => c.id === activeId) + 1)}/{cameras.length}
+              </span>
+            </IconButton>
+          )}
+          {torch !== null && <IconButton label={L.torch} onClick={toggleTorch} active={torch}>ϟ</IconButton>}
+        </span>
       </TopBar>
 
       <div ref={area} style={{ flex: 1, position: 'relative', display: 'grid', placeItems: 'center', overflow: 'hidden' }}>
@@ -345,7 +543,19 @@ function CameraStage(props: {
             </div>
           </div>
         ) : (
-          <div style={{ position: 'relative', width: box.width || '100%', height: box.height || '100%' }}>
+          <div
+            style={{ position: 'relative', width: box.width || '100%', height: box.height || '100%', overflow: 'hidden' }}
+            onPointerDown={onPointer}
+            onPointerMove={onPointer}
+            onPointerUp={onPointer}
+            onPointerCancel={onPointer}
+          >
+            <div
+              style={{
+                position: 'absolute', inset: 0, transformOrigin: 'center',
+                transform: zoomRange && !zoomRange.hw && zoom !== 1 ? `scale(${zoom})` : undefined,
+              }}
+            >
             <video ref={video} playsInline muted autoPlay style={{ width: '100%', height: '100%', display: 'block', objectFit: 'contain' }} />
             {dims && quad && (
               <svg viewBox={`0 0 ${dims.w} ${dims.h}`} preserveAspectRatio="none" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }}>
@@ -357,6 +567,20 @@ function CameraStage(props: {
                   strokeLinejoin="round"
                 />
               </svg>
+            )}
+            </div>
+            {zoomRange && <ZoomChips range={zoomRange} zoom={zoom} onZoom={setZoom} label={L.zoom} />}
+            {toast && (
+              <div
+                role="status"
+                style={{
+                  position: 'absolute', top: 12, left: '50%', transform: 'translateX(-50%)', padding: '6px 14px',
+                  borderRadius: 999, background: 'rgba(0,0,0,.6)', fontSize: 13, whiteSpace: 'nowrap', maxWidth: '90%',
+                  overflow: 'hidden', textOverflow: 'ellipsis',
+                }}
+              >
+                {toast}
+              </div>
             )}
           </div>
         )}
@@ -378,6 +602,42 @@ function CameraStage(props: {
         {pages > 0 ? <Button primary onClick={props.onDone}>{L.done}</Button> : <span style={{ minWidth: 96 }} />}
       </BottomBar>
     </>
+  );
+}
+
+function ZoomChips({ range, zoom, onZoom, label }: { range: { min: number; max: number }; zoom: number; onZoom: (z: number) => void; label: string }) {
+  const presets = [0.5, 1, 2, 3, 5, 10].filter((z) => z >= range.min - 0.01 && z <= range.max + 0.01);
+  if (presets.length < 2) presets.splice(0, presets.length, range.min, range.max);
+  // the chip nearest the current zoom shows the exact value, like the built-in camera app
+  const nearest = presets.reduce((a, b) => (Math.abs(b - zoom) < Math.abs(a - zoom) ? b : a));
+  const fmt = (z: number) => `${Math.round(z * 10) / 10}×`;
+  return (
+    <div
+      role="group"
+      aria-label={label}
+      style={{
+        position: 'absolute', left: '50%', bottom: 12, transform: 'translateX(-50%)', display: 'flex', gap: 6,
+        padding: 4, borderRadius: 999, background: 'rgba(0,0,0,.45)',
+      }}
+    >
+      {presets.map((z) => {
+        const active = z === nearest;
+        return (
+          <button
+            key={z}
+            aria-label={`${label} ${fmt(z)}`}
+            aria-pressed={active}
+            onClick={() => onZoom(z)}
+            style={{
+              minWidth: 40, height: 40, borderRadius: 999, border: 'none', cursor: 'pointer', fontSize: 13, fontWeight: 700,
+              background: active ? 'rgba(255,255,255,.9)' : 'transparent', color: active ? '#000' : '#fff',
+            }}
+          >
+            {active ? fmt(zoom) : fmt(z)}
+          </button>
+        );
+      })}
+    </div>
   );
 }
 

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { detectDocument, warpPerspective, enhance, createPdf } from '../src/index.js';
 import type { Quad } from '../src/types.js';
-import { scene } from './scene.js';
+import { scene, sunlitFloor } from './scene.js';
 
 const paper: Quad = [
   { x: 170, y: 210 },
@@ -20,6 +20,12 @@ describe('detectDocument', () => {
     expect(d).not.toBeNull();
     expect(maxCornerError(d!.corners, paper)).toBeLessThan(800 * 0.02);
     expect(d!.confidence).toBeGreaterThan(0.85);
+  });
+
+  it('separates white paper from a sunlit light floor and ignores a grout line beside it', () => {
+    const d = detectDocument(sunlitFloor(600, 800, paper));
+    expect(d).not.toBeNull();
+    expect(maxCornerError(d!.corners, paper)).toBeLessThan(800 * 0.015);
   });
 
   it('returns corners in input coordinates regardless of workSize', () => {

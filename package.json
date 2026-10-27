@@ -1,6 +1,6 @@
 {
   "name": "@quannqit/doc-scanner",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Document scanning for the web: detect a sheet of paper in a camera frame or photo, flatten its perspective, and clean it up like a scanner. Zero dependencies, no OpenCV. Optional React camera UI.",
   "keywords": [
     "document-scanner",
