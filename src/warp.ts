@@ -1,4 +1,4 @@
-import { quadSize, rectToQuad } from './geometry.js';
+import { quadAspect, quadSize, rectToQuad } from './geometry.js';
 import type { Quad, RGBAImage } from './types.js';
 
 export interface WarpOptions {
@@ -13,6 +13,14 @@ export interface WarpOptions {
 export function warpPerspective(img: RGBAImage, corners: Quad, opts: WarpOptions = {}): RGBAImage {
   const { maxSide = 2480 } = opts;
   let { width: W, height: H } = opts.width && opts.height ? { width: opts.width, height: opts.height } : quadSize(corners);
+  if (!(opts.width && opts.height)) {
+    // the edges of a tilted sheet are foreshortened: without this the page comes out stretched
+    const aspect = quadAspect(corners, img.width, img.height);
+    if (aspect) {
+      if (W / H > aspect) W = H * aspect;
+      else H = W / aspect;
+    }
+  }
   const k = Math.min(1, maxSide / Math.max(W, H));
   W = Math.max(1, Math.round(W * k));
   H = Math.max(1, Math.round(H * k));

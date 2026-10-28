@@ -38,3 +38,13 @@ export interface Detection {
   /** 0–1. How much of the quad's outline runs along real edges in the image. */
   confidence: number;
 }
+
+/**
+ * Finds a document in a frame, for callers that bring their own model (an ONNX corner detector,
+ * a server call, a different heuristic). Receive the full frame as a canvas, resolve corners in its
+ * pixel coordinates, or `null` when there is no document.
+ *
+ * Both the live preview and the full-resolution capture go through this, so it must cope with
+ * small frames (a few hundred pixels wide) and with photos.
+ */
+export type Detector = (frame: HTMLCanvasElement) => Promise<Quad | null>;

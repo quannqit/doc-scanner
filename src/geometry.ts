@@ -108,7 +108,38 @@ export function isConvex(q: Point[]): boolean {
 
 const dist = (a: Point, b: Point) => Math.hypot(a.x - b.x, a.y - b.y);
 
+/**
+ * Width/height of the rectangle that `q` is a photograph of, recovered from the quad's perspective.
+ *
+ * A sheet seen at an angle has foreshortened edges, so the ratio of the edge lengths is not the ratio of
+ * the page: a 190 mm wide page photographed from above can measure 0.90 instead of 0.71. With square
+ * pixels and the principal point at the image centre, the two vanishing points determine the focal
+ * length and then the true proportions (Zhang & He, *Whiteboard scanning and image enhancement*, 2004).
+ *
+ * Returns null when the quad has no usable perspective — a front-parallel shot, where the ratio simply
+ * is not recoverable from the four corners — or when the estimate is implausible.
+ */
+export function quadAspect(q: Quad, imageWidth: number, imageHeight: number): number | null {
+  const [h0, h1, h2, h3, h4, h5, h6, h7] = rectToQuad(1, 1, q);
+  // vanishing points of the two axes: where the unit directions go
+  if (!Number.isFinite(h6) || !Number.isFinite(h7) || Math.abs(h6) < 1e-7 || Math.abs(h7) < 1e-7) return null;
+  const cx = imageWidth / 2, cy = imageHeight / 2;
+  const v1x = h0 / h6, v1y = h3 / h6, v2x = h1 / h7, v2y = h4 / h7;
+  // square pixels: the two directions are orthogonal, which pins the focal length
+  const f2 = -((v1x - cx) * (v2x - cx) + (v1y - cy) * (v2y - cy));
+  const scale = Math.max(imageWidth, imageHeight);
+  if (!(f2 > 0) || !Number.isFinite(f2)) return null;
+  const f = Math.sqrt(f2);
+  // a focal length far outside a normal lens means the corners are too noisy to trust
+  if (f < scale * 0.15 || f > scale * 40) return null;
+  const u1 = [(h0 - cx * h6) / f, (h3 - cy * h6) / f, h6];
+  const u2 = [(h1 - cx * h7) / f, (h4 - cy * h7) / f, h7];
+  const r = Math.hypot(u1[0], u1[1], u1[2]) / Math.hypot(u2[0], u2[1], u2[2]);
+  return Number.isFinite(r) && r > 0.15 && r < 7 ? r : null;
+}
+
 /** Output size for flattening a quad: the longer of each pair of opposite edges. */
+
 export function quadSize(q: Quad): { width: number; height: number } {
   return {
     width: Math.max(dist(q[0], q[1]), dist(q[3], q[2])),

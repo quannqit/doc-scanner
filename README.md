@@ -9,6 +9,8 @@ adjustment, filters and multi-page capture.
   packaging, on light floors and in patchy sunlight, next to tile lines, and when a cable covers part of an edge.
 - **Scanner-style filters**: `color` (keeps red stamps and blue ink), `gray`, `bw`, `original`. Shadows and
   uneven lighting are removed.
+- **True proportions.** The output size comes from the quad's perspective, not from its edge lengths, so a
+  page shot at an angle comes out A4-shaped instead of its foreshortened silhouette.
 - **PDF export** of multiple pages, no PDF library needed.
 - Zoom buttons and pinch-to-zoom (camera zoom where available, digital otherwise).
 - Switch between a phone's rear cameras (main, ultra-wide, telephoto, macro); the choice is remembered.
@@ -57,6 +59,30 @@ function ScanButton({ onFiles }: { onFiles: (files: File[]) => void }) {
 | `labels` | `enLabels` | Any subset of `ScannerLabels`; `viLabels` ships for Vietnamese |
 | `zIndex` | very high | |
 | `maxDigitalZoom` | `3` | Zoom limit when the camera has no zoom of its own; `1` hides zoom there |
+| `detector` | built-in | Finds the corners instead of `detectDocument` — see below |
+
+**Bring your own detector.** `detector` replaces the built-in corner finder with anything that returns four
+corners — a quantized ONNX model, a server call, a different heuristic. It is called for the live preview
+(small frames, several times a second) and once at full resolution on capture:
+
+```tsx
+<DocumentScanner detector={myDetector} onDone={...} onCancel={...} />
+```
+
+```ts
+import type { Detector } from '@quannqit/doc-scanner';
+
+const myDetector: Detector = async (frame) => {
+  // frame: HTMLCanvasElement with the camera frame or the picked photo
+  // resolve corners in its pixel coordinates, or null
+  return null;
+};
+```
+
+Keep it fast — the preview calls it repeatedly. The component skips frames while a call is in flight, and
+falls back to the built-in detector if yours throws; `null` just leaves the outline empty for the user to
+place by hand. `demo-ml/` in the repository is a working example: PP-LCNet + heatmap head, int8, 1.6 MB,
+~0.97 IoU on SmartDoc.
 
 **Rear cameras.** Many phones have several rear cameras, and the browser's default pick is not always the
 main one (an ultra-wide lens may not focus up close). When there is more than one, a button in the top bar

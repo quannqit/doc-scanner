@@ -1,6 +1,6 @@
 {
   "name": "@quannqit/doc-scanner",
-  "version": "0.2.0",
+  "version": "0.2.3",
   "description": "Document scanning for the web: detect a sheet of paper in a camera frame or photo, flatten its perspective, and clean it up like a scanner. Zero dependencies, no OpenCV. Optional React camera UI.",
   "keywords": [
     "document-scanner",
@@ -48,7 +48,9 @@
     "test": "vitest run",
     "prepublishOnly": "npm run typecheck && npm test && npm run build",
     "demo": "vite --config demo/vite.config.ts",
-    "demo:build": "vite build --config demo/vite.config.ts"
+    "demo:build": "vite build --config demo/vite.config.ts",
+    "demo:ml:assets": "mkdir -p demo-ml/public && cp test/private/models/docaligner/lcnet100_static_int8.onnx demo-ml/public/lcnet100_int8.onnx",
+    "demo:ml": "npm run demo:ml:assets && vite --config demo-ml/vite.config.ts"
   },
   "peerDependencies": {
     "react": ">=17",
@@ -66,6 +68,7 @@
     "@types/react": "18.3.11",
     "@types/react-dom": "^18.3.0",
     "jpeg-js": "0.4.4",
+    "onnxruntime-web": "^1.20.1",
     "react": "18.3.1",
     "react-dom": "^18.3.1",
     "typescript": "5.6.2",

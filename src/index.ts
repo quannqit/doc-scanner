@@ -1,9 +1,9 @@
-export type { Detection, DetectOptions, EnhanceMode, Point, Quad, RGBAImage } from './types.js';
+export type { Detection, DetectOptions, Detector, EnhanceMode, Point, Quad, RGBAImage } from './types.js';
 export { detectDocument } from './detect.js';
 export { warpPerspective, type WarpOptions } from './warp.js';
 export { enhance } from './enhance.js';
 export { createPdf, type PdfOptions, type PdfPage } from './pdf.js';
-export { defaultQuad, orderQuad, quadSize } from './geometry.js';
+export { defaultQuad, orderQuad, quadAspect, quadSize } from './geometry.js';
 export {
   canvasPixels,
   canvasToBlob,

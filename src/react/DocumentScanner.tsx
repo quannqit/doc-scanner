@@ -4,7 +4,7 @@ import { canvasPixels, canvasToBlob, detectOnCanvas, pixelsToCanvas, toCanvas } 
 import { detectDocument } from '../detect.js';
 import { enhance } from '../enhance.js';
 import { defaultQuad } from '../geometry.js';
-import type { EnhanceMode, Quad, RGBAImage } from '../types.js';
+import type { Detector, EnhanceMode, Quad, RGBAImage } from '../types.js';
 import { warpPerspective } from '../warp.js';
 import { enLabels, type ScannerLabels } from './labels.js';
 
@@ -39,6 +39,12 @@ export interface DocumentScannerProps {
    * Digital zoom crops the frame, so it trades resolution for framing. Default 3; 1 hides zoom there.
    */
   maxDigitalZoom?: number;
+  /**
+   * Finds the document instead of the built-in detector — for example an ONNX corner model. Called for
+   * the live preview (small frames, several times a second) and once at full resolution on capture.
+   * Return `null` to let the user place the corners by hand.
+   */
+  detector?: Detector;
 }
 
 type Stage =
@@ -75,6 +81,13 @@ const ACCENT = '#2ecc71';
 function stamp() {
   const d = new Date(), p = (n: number) => String(n).padStart(2, '0');
   return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+}
+
+/** True when the outline runs into the frame edge, so part of the sheet is out of shot. */
+function touchesFrame(q: Quad, dims: { w: number; h: number } | null) {
+  if (!dims) return false;
+  const ex = dims.w * 0.015, ey = dims.h * 0.015;
+  return q.some((p) => p.x < ex || p.y < ey || p.x > dims.w - ex || p.y > dims.h - ey);
 }
 
 /** Largest w×h box with the given aspect ratio that fits in the element. */
@@ -118,6 +131,7 @@ export function DocumentScanner({
   labels: labelOverrides,
   zIndex = 2147483000,
   maxDigitalZoom = 3,
+  detector,
 }: DocumentScannerProps) {
   const L = { ...enLabels, ...labelOverrides, modes: { ...enLabels.modes, ...labelOverrides?.modes } };
   const [stage, setStage] = useState<Stage>({ kind: 'camera' });
@@ -136,13 +150,25 @@ export function DocumentScanner({
     return () => void (document.body.style.overflow = prev);
   }, []);
 
+  /** Corner detection for a captured frame: the caller's detector when given, the built-in one otherwise. */
+  const findCorners = useCallback(async (source: HTMLCanvasElement): Promise<Quad | null> => {
+    if (detector) {
+      try {
+        return await detector(source);
+      } catch {
+        // a broken model must not block scanning — fall back rather than trap the user
+      }
+    }
+    return detectOnCanvas(source)?.corners ?? null;
+  }, [detector]);
+
   const toAdjust = useCallback(async (source: HTMLCanvasElement, hint?: Quad | null) => {
     setBusy(true);
     await nextFrame();
-    const d = detectOnCanvas(source);
-    setStage({ kind: 'adjust', source, corners: d?.corners ?? hint ?? defaultQuad(source.width, source.height) });
+    const corners = (await findCorners(source)) ?? hint ?? defaultQuad(source.width, source.height);
+    setStage({ kind: 'adjust', source, corners });
     setBusy(false);
-  }, []);
+  }, [findCorners]);
 
   const onFile = async (e: ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
@@ -205,6 +231,7 @@ export function DocumentScanner({
           onPick={() => fileInput.current?.click()}
           onNativeCamera={() => cameraInput.current?.click()}
           onDone={() => onDone(pages)}
+          detector={detector}
         />
       )}
       {stage.kind === 'adjust' && (
@@ -251,8 +278,9 @@ function CameraStage(props: {
   onPick: () => void;
   onNativeCamera: () => void;
   onDone: () => void;
+  detector?: Detector;
 }) {
-  const { labels: L, pages, cameraError, onCameraError, maxDigitalZoom } = props;
+  const { labels: L, pages, cameraError, onCameraError, maxDigitalZoom, detector } = props;
   const video = useRef<HTMLVideoElement>(null);
   const track = useRef<MediaStreamTrack | null>(null);
   const live = useRef<Quad | null>(null);
@@ -445,25 +473,16 @@ function CameraStage(props: {
     small.width = Math.round(dims.w * k);
     small.height = Math.round(dims.h * k);
     const ctx = small.getContext('2d', { willReadFrequently: true })!;
-    let misses = 0, raf = 0, last = 0, gap = 120;
-    const tick = (t: number) => {
-      raf = requestAnimationFrame(tick);
-      const v = video.current;
-      if (!v || t - last < gap || v.readyState < 2) return;
-      last = t;
-      const crop = viewCrop(dims.w, dims.h);
-      ctx.drawImage(v, crop.x, crop.y, crop.w, crop.h, 0, 0, small.width, small.height);
-      const kc = small.width / crop.w;
-      const started = performance.now();
-      const d = detectDocument(ctx.getImageData(0, 0, small.width, small.height), { workSize: LIVE_SIZE });
+    let misses = 0, raf = 0, last = 0, gap = 120, busy = false, cancelled = false;
+    const apply = (corners: Quad | null, started: number, kc: number, crop: { x: number; y: number }) => {
       // keep the main thread mostly free on slower phones: detect at most ~1/3 of the time
       gap = Math.max(120, (performance.now() - started) * 3);
-      if (!d) {
+      if (!corners) {
         if (++misses > 3) (live.current = null), setQuad(null);
         return;
       }
       misses = 0;
-      const next = d.corners.map((p) => ({ x: p.x / kc + crop.x, y: p.y / kc + crop.y })) as Quad;
+      const next = corners.map((p) => ({ x: p.x / kc + crop.x, y: p.y / kc + crop.y })) as Quad;
       const prev = live.current;
       const jump = prev ? Math.max(...next.map((p, i) => Math.hypot(p.x - prev[i].x, p.y - prev[i].y))) : Infinity;
       // smooth small jitter, follow big moves immediately
@@ -472,9 +491,33 @@ function CameraStage(props: {
         : next;
       setQuad(live.current);
     };
+    const tick = (t: number) => {
+      raf = requestAnimationFrame(tick);
+      const v = video.current;
+      if (busy || !v || t - last < gap || v.readyState < 2) return;
+      last = t;
+      const crop = viewCrop(dims.w, dims.h);
+      ctx.drawImage(v, crop.x, crop.y, crop.w, crop.h, 0, 0, small.width, small.height);
+      const kc = small.width / crop.w;
+      const started = performance.now();
+      if (detector) {
+        // a model runs asynchronously: never start a second one while this frame is still being read
+        busy = true;
+        detector(small)
+          .then((q) => !cancelled && apply(q, started, kc, crop))
+          .catch(() => !cancelled && apply(null, started, kc, crop))
+          .finally(() => (busy = false));
+        return;
+      }
+      const d = detectDocument(ctx.getImageData(0, 0, small.width, small.height), { workSize: LIVE_SIZE });
+      apply(d?.corners ?? null, started, kc, crop);
+    };
     raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
-  }, [dims]); // eslint-disable-line react-hooks/exhaustive-deps -- viewCrop reads refs
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(raf);
+    };
+  }, [dims, detector]); // eslint-disable-line react-hooks/exhaustive-deps -- viewCrop reads refs
 
   const capture = async () => {
     const v = video.current;
@@ -586,7 +629,11 @@ function CameraStage(props: {
         )}
       </div>
 
-      {!cameraError && <Hint>{quad ? L.holdHint : L.aimHint}</Hint>}
+      {!cameraError && (
+        <Hint>
+          {!quad ? L.aimHint : touchesFrame(quad, dims) ? L.tooCloseHint : L.holdHint}
+        </Hint>
+      )}
 
       <BottomBar>
         <Button onClick={props.onPick}>{L.pickPhoto}</Button>

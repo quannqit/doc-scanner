@@ -11,6 +11,8 @@ export interface ScannerLabels {
   camera: string;
   aimHint: string;
   holdHint: string;
+  /** Shown when the outline runs into the frame: part of the page is out of shot. */
+  tooCloseHint: string;
   adjustHint: string;
   retake: string;
   crop: string;
@@ -34,6 +36,7 @@ export const enLabels: ScannerLabels = {
   camera: 'Camera',
   aimHint: 'Point the camera at a document',
   holdHint: 'Document found — hold still and tap capture',
+  tooCloseHint: 'Move back — the page is cut off',
   adjustHint: 'Drag the corners to the edges of the document',
   retake: 'Retake',
   crop: 'Crop',
@@ -57,6 +60,7 @@ export const viLabels: ScannerLabels = {
   camera: 'Camera',
   aimHint: 'Hướng camera vào tài liệu',
   holdHint: 'Đã thấy tài liệu — giữ yên và bấm chụp',
+  tooCloseHint: 'Lùi lại một chút — trang đang bị cắt',
   adjustHint: 'Kéo các góc khớp với mép tài liệu',
   retake: 'Chụp lại',
   crop: 'Cắt',

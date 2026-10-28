@@ -3,3 +3,4 @@ dist
 test/private
 *.tgz
 demo-dist
+demo-ml-dist

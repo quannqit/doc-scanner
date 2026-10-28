@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>doc-scanner · lcnet100 int8</title>
+    <style>
+      :root {
+        --bg: #0b0f14;
+        --panel: #131a22;
+        --line: #223041;
+        --text: #e6edf3;
+        --muted: #8b9bad;
+        --accent: #34d399;
+        --accent-dim: #065f46;
+      }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; background: var(--bg); color: var(--text); }
+      body {
+        font: 15px/1.45 -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        padding: 18px 16px 40px;
+        max-width: 760px; margin: 0 auto;
+      }
+      header { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
+      h1 { font-size: 17px; font-weight: 600; margin: 0; letter-spacing: -0.01em; }
+      h1 span { color: var(--muted); font-weight: 400; }
+      .chips { display: flex; gap: 6px; flex-wrap: wrap; margin-left: auto; }
+      .chip {
+        font-size: 12px; color: var(--muted); background: var(--panel);
+        border: 1px solid var(--line); border-radius: 999px; padding: 4px 9px; white-space: nowrap;
+      }
+      .chip.ok { color: var(--accent); border-color: var(--accent-dim); }
+      .chip.err { color: #f87171; border-color: #7f1d1d; }
+      .stage-wrap {
+        position: relative; background: #05080b; border: 1px solid var(--line);
+        border-radius: 14px; overflow: hidden; min-height: 180px;
+        display: flex; align-items: center; justify-content: center;
+      }
+      #stage { display: block; width: 100%; height: auto; }
+      #overlay { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+      #placeholder { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); font-size: 14px; text-align: center; padding: 24px; }
+      .controls { display: flex; gap: 8px; flex-wrap: wrap; margin: 12px 0; align-items: center; }
+      button, .btn {
+        font: inherit; font-size: 14px; color: var(--text); background: var(--panel);
+        border: 1px solid var(--line); border-radius: 10px; padding: 9px 14px; cursor: pointer;
+      }
+      button:hover:not(:disabled), .btn:hover { border-color: #3b4d63; }
+      button:disabled { opacity: 0.45; cursor: default; }
+      button.primary { background: var(--accent); color: #04231a; border-color: var(--accent); font-weight: 600; }
+      select { font: inherit; font-size: 14px; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 9px 10px; }
+      .spacer { flex: 1; }
+      .hint { color: var(--muted); font-size: 13px; margin: 8px 0 0; min-height: 18px; }
+      .result { margin-top: 18px; display: none; }
+      .result.on { display: block; }
+      .result h2 { font-size: 13px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; margin: 0 0 8px; }
+      .shots { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+      .shots figure { margin: 0; }
+      .shots canvas { width: 100%; border-radius: 10px; border: 1px solid var(--line); display: block; background: #fff; }
+      .shots figcaption { font-size: 12px; color: var(--muted); margin-top: 5px; }
+      @media (max-width: 520px) { .shots { grid-template-columns: 1fr; } }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>doc-scanner <span>· lcnet100 int8</span></h1>
+      <div class="chips">
+        <span id="status" class="chip">loading model…</span>
+        <span id="timing" class="chip">—</span>
+      </div>
+    </header>
+
+    <div class="stage-wrap" id="stageWrap">
+      <canvas id="stage" width="640" height="420"></canvas>
+      <canvas id="overlay" width="640" height="420"></canvas>
+      <div id="placeholder">Open the camera or pick a photo</div>
+    </div>
+
+    <div class="controls">
+      <button id="cam">Camera</button>
+      <label class="btn">Photo<input id="file" type="file" accept="image/*" hidden /></label>
+      <button id="scan" class="primary" disabled>Scan</button>
+      <div class="spacer"></div>
+      <select id="mode" aria-label="filter">
+        <option value="color">color</option>
+        <option value="gray">gray</option>
+        <option value="bw">bw</option>
+        <option value="original">original</option>
+      </select>
+    </div>
+    <p class="hint" id="hint">Detection runs in your browser. Nothing is uploaded.</p>
+
+    <section class="result" id="result">
+      <h2>Page</h2>
+      <div class="shots">
+        <figure><canvas id="flat"></canvas><figcaption>flattened</figcaption></figure>
+        <figure><canvas id="clean"></canvas><figcaption id="cleanLabel">enhanced</figcaption></figure>
+      </div>
+      <div class="controls">
+        <button id="download">Download JPEG</button>
+      </div>
+    </section>
+
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>
